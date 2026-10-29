@@ -57,12 +57,15 @@ jobs:
 
   apk:
     needs: turnip
+    # without a Turnip build the APK still builds (system driver only), so both halves can be fixed at once
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v7
+        continue-on-error: true
         with:
           name: turnip
           path: turnip
@@ -89,10 +92,14 @@ jobs:
           gradle-version: 8.11.1
 
       - name: Build
-        env:
-          PT_TURNIP_SO: ${{ github.workspace }}/turnip/vulkan.ad07XX.so
-          PT_EXTRA_LICENSES: Mesa-Turnip-MIT.txt=${{ github.workspace }}/turnip/Mesa-license.rst;libadrenotools-BSD-2.txt=${{ runner.temp }}/adrenotools/LICENSE
         run: |
+          if [ -f turnip/vulkan.ad07XX.so ]; then
+            export PT_TURNIP_SO="$PWD/turnip/vulkan.ad07XX.so"
+            export PT_EXTRA_LICENSES="Mesa-Turnip-MIT.txt=$PWD/turnip/Mesa-license.rst;libadrenotools-BSD-2.txt=$RUNNER_TEMP/adrenotools/LICENSE"
+          else
+            echo "::warning::no Turnip build: this APK uses the system driver only"
+            export PT_EXTRA_LICENSES="libadrenotools-BSD-2.txt=$RUNNER_TEMP/adrenotools/LICENSE"
+          fi
           cd android
           ../tools/android/ci_run.sh "APK build" gradle --no-daemon assembleRelease
           ls -la app/build/outputs/apk/release
@@ -112,7 +119,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Publish
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && needs.turnip.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
