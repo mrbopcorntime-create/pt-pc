@@ -29,7 +29,7 @@ endian = 'little'
 CROSS
 cd mesa
 if ! meson setup build --cross-file ../android-aarch64 -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=33 \
-  -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true \
+  -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl \
   -Degl=disabled > "$work/meson-setup.txt" 2>&1; then
   # meson's own summary of what failed, without the probe log it prints in CI
   grep -nE "ERROR|Dependency .* found: NO|Program .* found: NO|meson.build:[0-9]+:[0-9]+" "$work/meson-setup.txt" | tail -40
