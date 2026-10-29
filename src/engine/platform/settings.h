@@ -14,7 +14,12 @@ struct AppSettings {
     struct Display {
         int width = 1600;
         int height = 900;
+#ifdef __ANDROID__
+        /* borderless fullscreen: SDL hides the status and navigation bars (immersive mode) */
+        int fullscreen = 1;
+#else
         int fullscreen = 0;
+#endif
         float refresh_rate = 0.0f;
         bool vsync = true;
         int fps_limit = 0;

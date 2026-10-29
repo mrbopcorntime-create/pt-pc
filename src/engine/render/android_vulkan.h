@@ -24,6 +24,9 @@ const char* DriverName();
 bool UsingTurnip();
 /* the surface for SDL's window through the loaded driver (SDL's own Vulkan library would be a different one) */
 bool CreateSurface(VkInstance instance, SDL_Window* window, VkSurfaceKHR& surface);
+/* the ANativeWindow behind SDL's window now: Android replaces it when the app returns from the background, and the old
+   surface is then lost (vk_context.cpp makes a new one before the swapchain) */
+void* NativeWindow(SDL_Window* window);
 /* after the physical device is chosen: whether BC textures work, patching Qualcomm's driver if it can be patched. When this
    returns true and `feature_flag` is false, the formats work but the device feature must not be requested. */
 bool PrepareBcTextures(VkInstance instance, VkPhysicalDevice physical, bool& feature_flag);

@@ -22,6 +22,8 @@ jobs:
     outputs:
       mesa: ${{ steps.mesa.outputs.tag }}
     steps:
+      - uses: actions/checkout@v7
+
       - name: Newest Mesa release
         id: mesa
         run: |
@@ -43,34 +45,10 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q bison flex patchelf glslang-tools ninja-build
-          pip install --user meson mako pyyaml packaging
-          git clone --depth 1 --branch "${{ steps.mesa.outputs.tag }}" https://gitlab.freedesktop.org/mesa/mesa.git mesa
-          ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          cat > android-aarch64 <<EOF
-          [binaries]
-          ar = '$ndk/llvm-ar'
-          c = ['$ndk/aarch64-linux-android33-clang']
-          cpp = ['$ndk/aarch64-linux-android33-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
-          c_ld = 'lld'
-          cpp_ld = 'lld'
-          strip = '$ndk/llvm-strip'
-          pkg-config = ['env', 'PKG_CONFIG_LIBDIR=/nonexistent', '/usr/bin/pkg-config']
-          [host_machine]
-          system = 'android'
-          cpu_family = 'aarch64'
-          cpu = 'armv8'
-          endian = 'little'
-          EOF
-          cd mesa
-          meson setup build --cross-file ../android-aarch64 -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=33 \
-            -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true \
-            -Degl=disabled
-          ninja -C build src/freedreno/vulkan/libvulkan_freedreno.so
-          mkdir -p ../turnip
-          cp build/src/freedreno/vulkan/libvulkan_freedreno.so ../turnip/vulkan.ad07XX.so
-          patchelf --set-soname vulkan.adreno.so ../turnip/vulkan.ad07XX.so
-          cp docs/license.rst ../turnip/Mesa-license.rst
-          echo "${{ steps.mesa.outputs.tag }}" > ../turnip/version.txt
+          python3 -m pip install --user --break-system-packages meson mako pyyaml packaging
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          tools/android/ci_run.sh "Turnip build" tools/android/build_turnip.sh "${{ steps.mesa.outputs.tag }}" turnip
 
       - uses: actions/upload-artifact@v7
         with:
@@ -98,7 +76,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q glslc ninja-build
-          pip install --user cmake==3.31.6
+          python3 -m pip install --user --break-system-packages cmake==3.31.6
           cmake_root=$(python3 -c "import cmake, os; print(os.path.join(os.path.dirname(cmake.__file__), 'data'))")
           "$cmake_root/bin/cmake" --version
           echo "cmake.dir=$cmake_root" > android/local.properties
@@ -116,7 +94,7 @@ jobs:
           PT_EXTRA_LICENSES: Mesa-Turnip-MIT.txt=${{ github.workspace }}/turnip/Mesa-license.rst;libadrenotools-BSD-2.txt=${{ runner.temp }}/adrenotools/LICENSE
         run: |
           cd android
-          gradle --no-daemon assembleRelease
+          ../tools/android/ci_run.sh "APK build" gradle --no-daemon assembleRelease
           ls -la app/build/outputs/apk/release
           cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/PT-Port-Android.apk"
           unzip -l "$RUNNER_TEMP/PT-Port-Android.apk" | grep -E "lib/arm64-v8a|assets/turnip|shaders/fsr1" || true

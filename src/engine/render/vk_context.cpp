@@ -320,6 +320,7 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
 #ifdef __ANDROID__
         /* SDL's surface would come from the system libvulkan.so SDL loaded, not from the driver volk uses */
         if (!created && !android::CreateSurface(instance, window, surface)) return false;
+        android_window_ = android::NativeWindow(window);
         created = true;
 #endif
         if (!created && !SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface)) {
@@ -783,6 +784,23 @@ void Context::Shutdown() {
 
 bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool want_hdr) {
     vkDeviceWaitIdle(device);
+#ifdef __ANDROID__
+    /* back from the background, SDL's window has a new ANativeWindow and the surface of the old one is lost */
+    if (window_ && surface) {
+        void* native = android::NativeWindow(window_);
+        if (!native) return false;
+        if (native != android_window_) {
+            DestroySwapchain();
+            vkDestroySurfaceKHR(instance, surface, nullptr);
+            surface = VK_NULL_HANDLE;
+            if (!android::CreateSurface(instance, window_, surface)) return false;
+            android_window_ = native;
+            VkBool32 supported = VK_FALSE;
+            vkGetPhysicalDeviceSurfaceSupportKHR(physical, queue_family, surface, &supported);
+            LogInfo("vulkan: new Android surface for the restored window{}", supported ? "" : " (queue reports no present support)");
+        }
+    }
+#endif
     swapchain_refused = false;
     vsync = force_vsync ? true : (vsync && !force_vsync_off);
     VkSurfaceCapabilitiesKHR caps;

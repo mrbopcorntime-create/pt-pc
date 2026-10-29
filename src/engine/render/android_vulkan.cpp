@@ -54,8 +54,12 @@ const char* DriverName() { return g_turnip ? "Turnip (Mesa)" : "system"; }
 
 bool UsingTurnip() { return g_turnip; }
 
+void* NativeWindow(SDL_Window* window) {
+    return SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr);
+}
+
 bool CreateSurface(VkInstance instance, SDL_Window* window, VkSurfaceKHR& surface) {
-    auto* native = static_cast<ANativeWindow*>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr));
+    auto* native = static_cast<ANativeWindow*>(NativeWindow(window));
     if (!native) {
         LogError("vulkan: the SDL window has no ANativeWindow yet");
         return false;

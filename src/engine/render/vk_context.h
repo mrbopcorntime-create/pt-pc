@@ -173,6 +173,7 @@ private:
     uint64_t failures_hidden_ = 0;
     bool hdr_off_logged_ = false;
     SDL_Window* window_ = nullptr;
+    void* android_window_ = nullptr;  // the ANativeWindow the surface was made for (Android)
     VkCommandPool upload_pool_ = VK_NULL_HANDLE;
     struct DeferredSubmit {
         VkFence fence = VK_NULL_HANDLE;
