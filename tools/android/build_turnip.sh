@@ -28,9 +28,15 @@ cpu = 'armv8'
 endian = 'little'
 CROSS
 cd mesa
-meson setup build --cross-file ../android-aarch64 -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=33 \
+if ! meson setup build --cross-file ../android-aarch64 -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=33 \
   -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true \
-  -Degl=disabled
+  -Degl=disabled > "$work/meson-setup.txt" 2>&1; then
+  # meson's own summary of what failed, without the probe log it prints in CI
+  grep -nE "ERROR|Dependency .* found: NO|Program .* found: NO|meson.build:[0-9]+:[0-9]+" "$work/meson-setup.txt" | tail -40
+  grep -E "^(  )?(Build|Host|Message|WARNING)" "$work/meson-setup.txt" | tail -20
+  exit 1
+fi
+tail -5 "$work/meson-setup.txt"
 ninja -C build src/freedreno/vulkan/libvulkan_freedreno.so
 cp build/src/freedreno/vulkan/libvulkan_freedreno.so "$out/vulkan.ad07XX.so"
 patchelf --set-soname vulkan.adreno.so "$out/vulkan.ad07XX.so"

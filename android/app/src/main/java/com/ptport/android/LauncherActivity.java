@@ -22,9 +22,13 @@ import androidx.core.content.FileProvider;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 
 /**
  * First screen: unpacks the runtime files, imports the game archives from the player's fake PKG (picked with the system
@@ -130,7 +134,7 @@ public class LauncherActivity extends Activity {
             settings.setMaxHeight(next);
             refresh();
         });
-        shareLog = button(column, "Share log (pt.log)", v -> shareLog());
+        shareLog = button(column, "Share log", v -> shareLog());
 
         TextView help = new TextView(this);
         help.setText("Controller: Options/Start pauses. Back/Share (or View) opens the PC settings page, where FSR 1 "
@@ -154,7 +158,7 @@ public class LauncherActivity extends Activity {
         driver.setText("Graphics driver: " + chosen);
         resolution.setEnabled(!busy);
         resolution.setText("Render resolution cap: " + Settings.heightName(settings.maxHeight()));
-        shareLog.setEnabled(!busy && GameFiles.logFile(this).isFile());
+        shareLog.setEnabled(!busy);
         if (!busy) {
             String soc = Build.VERSION.SDK_INT >= 31 ? Build.SOC_MANUFACTURER + " " + Build.SOC_MODEL : Build.HARDWARE;
             status.setText((game ? "Game files ready." : "Import your P.T. fake PKG to begin (about 1.3 GB is written).")
@@ -209,14 +213,46 @@ public class LauncherActivity extends Activity {
         }, "import").start();
     }
 
+    /** pt.log followed by the app's own Android log (startup errors before pt.log exists, Java exceptions) */
+    private File bundleLog() throws IOException {
+        File dir = GameFiles.dataDir(this);
+        if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("cannot create " + dir);
+        File out = new File(dir, "pt-android-report.txt");
+        try (FileOutputStream sink = new FileOutputStream(out)) {
+            String soc = Build.VERSION.SDK_INT >= 31 ? Build.SOC_MANUFACTURER + " " + Build.SOC_MODEL : Build.HARDWARE;
+            sink.write(("device: " + Build.MANUFACTURER + " " + Build.MODEL + " (" + soc + "), Android " + Build.VERSION.RELEASE
+                    + " (API " + Build.VERSION.SDK_INT + ")\ndriver choice: " + settings.driver() + ", resolution cap: "
+                    + Settings.heightName(settings.maxHeight()) + "\n\n===== pt.log =====\n").getBytes(StandardCharsets.UTF_8));
+            File log = GameFiles.logFile(this);
+            if (log.isFile()) Files.copy(log.toPath(), sink);
+            else sink.write("(no pt.log yet)\n".getBytes(StandardCharsets.UTF_8));
+            sink.write("\n===== Android log (this app) =====\n".getBytes(StandardCharsets.UTF_8));
+            try {
+                Process logcat = new ProcessBuilder("logcat", "-d", "-t", "3000", "-v", "time").redirectErrorStream(true).start();
+                try (InputStream in = logcat.getInputStream()) {
+                    byte[] buffer = new byte[1 << 16];
+                    for (int n; (n = in.read(buffer)) > 0; ) sink.write(buffer, 0, n);
+                }
+            } catch (IOException e) {
+                sink.write(("logcat unavailable: " + e.getMessage() + "\n").getBytes(StandardCharsets.UTF_8));
+            }
+        }
+        return out;
+    }
+
     private void shareLog() {
-        File log = GameFiles.logFile(this);
-        if (!log.isFile()) return;
+        File log;
+        try {
+            log = bundleLog();
+        } catch (IOException e) {
+            status.setText("Could not gather the log: " + e.getMessage());
+            return;
+        }
         Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".logs", log);
         Intent send = new Intent(Intent.ACTION_SEND);
         send.setType("text/plain");
         send.putExtra(Intent.EXTRA_STREAM, uri);
-        send.putExtra(Intent.EXTRA_SUBJECT, "P.T. Android pt.log");
+        send.putExtra(Intent.EXTRA_SUBJECT, "P.T. Android log");
         send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         startActivity(Intent.createChooser(send, "Share pt.log"));
     }
