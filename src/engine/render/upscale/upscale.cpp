@@ -33,7 +33,7 @@ struct KindInfo {
 
 constexpr KindInfo kKinds[] = {{"Off", "off"},           {"AMD FSR 3", "fsr3"},          {"NVIDIA DLSS", "dlss"},
                                {"Intel XeSS", "xess"},    {"Spatial (test)", "spatial"}, {"AMD FSR 4", "fsr4"},
-                               {"Apple MetalFX", "metalfx"}};
+                               {"Apple MetalFX", "metalfx"}, {"AMD FSR 1", "fsr1"}};
 
 constexpr const char* kDlssModels[] = {"auto", "k", "l", "m"};
 constexpr const char* kFrameGens[] = {"off", "fsr3", "dlss", "metalfx", "xess"};
@@ -867,7 +867,7 @@ bool UpscaleHost::Available(UpscalerKind kind, std::string& reason, bool probe) 
         reason.clear();
         return i == 0;
     }
-    if (kind == UpscalerKind::Spatial) {
+    if (kind == UpscalerKind::Spatial || kind == UpscalerKind::Fsr1) {
         reason.clear();
         return true;
     }

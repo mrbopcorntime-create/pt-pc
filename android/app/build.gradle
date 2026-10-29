@@ -1,0 +1,100 @@
+// P.T. Port for Android (docs/android.md). The native game is the port's own CMake build (../../CMakeLists.txt) for
+// arm64-v8a; tools/android/stage_runtime.py stages the shaders, fonts, licences, SDL's Java sources and, in CI, the Turnip
+// driver built from Mesa (.github/workflows/android.yml).
+plugins {
+    id 'com.android.application'
+}
+
+def stageDir = layout.buildDirectory.dir("generated/pt-runtime").get().asFile
+def sdlDir = new File(rootProject.projectDir, "build/sdl")
+def runNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1") as int
+
+android {
+    namespace 'com.ptport.android'
+    compileSdk 35
+    ndkVersion "28.2.13676358"
+
+    defaultConfig {
+        applicationId "com.ptport.android"
+        minSdk 29
+        targetSdk 35
+        versionCode runNumber
+        versionName "1.0.8-android.${runNumber}"
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=c++_static", "-DANDROID_PLATFORM=android-29", "-DPT_VOICE=OFF", "-DPT_UPSCALERS=OFF",
+                        "-DPT_OPENXR=OFF"
+                targets "pt", "SDL3-shared", "hook_impl", "main_hook", "file_redirect_hook", "gsl_alloc_hook"
+            }
+        }
+    }
+
+    // A fixed key, committed on purpose: these are personal sideload builds, and an update signed with the same key
+    // installs over the old version, which keeps the imported game files (an uninstall deletes them).
+    signingConfigs {
+        sideload {
+            storeFile file("../ptport-sideload.keystore")
+            storePassword "ptport-sideload"
+            keyAlias "ptport"
+            keyPassword "ptport-sideload"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.sideload
+        }
+        debug {
+            signingConfig signingConfigs.sideload
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "../../CMakeLists.txt"
+            version "3.31.6"
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // adrenotools loads its hooks from nativeLibraryDir, which needs extracted libraries
+            useLegacyPackaging true
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs += new File(sdlDir, "android-project/app/src/main/java")
+            assets.srcDirs += stageDir
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core:1.13.1'
+}
+
+tasks.register('stageRuntime', Exec) {
+    def args = ['python3', "${rootProject.projectDir}/../tools/android/stage_runtime.py", '--out', stageDir.path, '--sdl', sdlDir.path]
+    def turnip = System.getenv("PT_TURNIP_SO")
+    if (turnip) args += ['--turnip', turnip]
+    def extra = System.getenv("PT_EXTRA_LICENSES")
+    if (extra) extra.split(';').each { if (it) args += ['--license', it] }
+    commandLine args
+}
+preBuild.dependsOn stageRuntime

@@ -15,6 +15,16 @@ void KeyPressLatch::ProcessEvent(const SDL_Event& event, uint32_t scancode) {
     if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == scancode) {
         pressed_ = true;
     }
+    /* With the stand-in key on, both sticks clicked together stand in for it on a controller (a phone has no keyboard,
+       docs/android.md): the second stick pressed while the other is held */
+    if (scancode != SDL_SCANCODE_UNKNOWN && event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN &&
+        (event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK || event.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK)) {
+        if (SDL_Gamepad* pad = SDL_GetGamepadFromID(event.gbutton.which)) {
+            const SDL_GamepadButton other =
+                event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK ? SDL_GAMEPAD_BUTTON_RIGHT_STICK : SDL_GAMEPAD_BUTTON_LEFT_STICK;
+            if (SDL_GetGamepadButton(pad, other)) pressed_ = true;
+        }
+    }
 }
 
 namespace {

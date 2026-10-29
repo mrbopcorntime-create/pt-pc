@@ -64,7 +64,7 @@ void SceneRenderer::RecordPost(gpu::CommandList& cmd, const SceneLighting& light
     push.f1.x = 0.0f;
 
     const char* native_order_override = std::getenv("PT_AA_NATIVE_ORDER");
-    const bool native_aa_order = toggles.fxaa && !up_.enabled && native_order_override && std::string(native_order_override) == "1";
+    const bool native_aa_order = toggles.fxaa && (!up_.enabled || up_.fsr1) && native_order_override && std::string(native_order_override) == "1";
     if (native_aa_order) {
         cmd.UseTargets({{&hdr_, gpu::Layout::ShaderReadOnly}, {&hdr_copy_, gpu::Layout::ColorAttachment}});
         cmd.BeginPass(output_extent_, {{&hdr_copy_, false, {}}});
@@ -182,7 +182,8 @@ void SceneRenderer::RecordPost(gpu::CommandList& cmd, const SceneLighting& light
         current = 1 - current;
     };
 
-    if (toggles.fxaa && !up_.enabled && !native_aa_order) {
+    /* FSR 1 is spatial: the image still needs the original's FXAA (at the output resolution here) */
+    if (toggles.fxaa && (!up_.enabled || up_.fsr1) && !native_aa_order) {
         push.ids.x = ldr_index(current);
         run(fxaa_, push);
     }

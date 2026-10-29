@@ -1980,8 +1980,8 @@ bool DrawUpscaleSettings(App& app) {
     pt::UpscaleSettings& u = app.scene.upscale;
     bool changed = false;
     ImGui::SeparatorText("Upscaling");
-    const pt::UpscalerKind kinds[] = {pt::UpscalerKind::Off, pt::UpscalerKind::Fsr, pt::UpscalerKind::Fsr4, pt::UpscalerKind::Dlss,
-                                      pt::UpscalerKind::Xess, pt::UpscalerKind::MetalFx};
+    const pt::UpscalerKind kinds[] = {pt::UpscalerKind::Off, pt::UpscalerKind::Fsr1, pt::UpscalerKind::Fsr, pt::UpscalerKind::Fsr4,
+                                      pt::UpscalerKind::Dlss, pt::UpscalerKind::Xess, pt::UpscalerKind::MetalFx};
     if (ImGui::BeginCombo("Upscaler", pt::UpscalerName(u.kind))) {
         for (pt::UpscalerKind kind : kinds) {
             std::string reason;
@@ -2020,7 +2020,7 @@ bool DrawUpscaleSettings(App& app) {
     if (u.quality == pt::UpscaleQuality::Custom) {
         changed |= ImGui::SliderFloat("Render scale", &u.scale, 0.33f, 1.0f, "%.2f");
     }
-    ImGui::BeginDisabled(u.kind != pt::UpscalerKind::Fsr && u.kind != pt::UpscalerKind::Fsr4);
+    ImGui::BeginDisabled(u.kind != pt::UpscalerKind::Fsr && u.kind != pt::UpscalerKind::Fsr4 && u.kind != pt::UpscalerKind::Fsr1);
     changed |= ImGui::SliderFloat("Sharpness (FSR)", &u.sharpness, 0.0f, 1.0f, "%.2f");
     ImGui::EndDisabled();
     if (u.kind == pt::UpscalerKind::Dlss) {
@@ -2994,7 +2994,7 @@ public:
         quality.enabled = !off;
         upscaling.rows.push_back(std::move(quality));
         const int sharpness_step = std::clamp(static_cast<int>(std::lround(u.sharpness * 10.0f)), 0, 10);
-        const bool fsr = u.kind == pt::UpscalerKind::Fsr || u.kind == pt::UpscalerKind::Fsr4;
+        const bool fsr = u.kind == pt::UpscalerKind::Fsr || u.kind == pt::UpscalerKind::Fsr4 || u.kind == pt::UpscalerKind::Fsr1;
         if (u.kind == pt::UpscalerKind::Dlss) {
             pt::game::PcSettingRow model = Row(kDlssModel, "pc_dlss_model", {"pc_dlss_model_auto", "K", "L", "M"},
                                                std::clamp(static_cast<int>(u.dlss_model), 0, 3), "pc_note_dlss_model");
@@ -4877,6 +4877,7 @@ private:
     static std::string ShortName(pt::UpscalerKind kind) {
         switch (kind) {
         case pt::UpscalerKind::Fsr: return "FSR 3";
+        case pt::UpscalerKind::Fsr1: return "FSR 1";
         case pt::UpscalerKind::Fsr4: return "FSR 4";
         case pt::UpscalerKind::Dlss: return "DLSS";
         case pt::UpscalerKind::Xess: return "XeSS";
@@ -4888,7 +4889,7 @@ private:
     std::vector<pt::UpscalerKind> Upscalers(std::vector<std::string>* notes) const {
         std::vector<pt::UpscalerKind> kinds{pt::UpscalerKind::Off};
         if (notes) notes->assign(1, std::string());
-        for (const pt::UpscalerKind kind : {pt::UpscalerKind::Fsr, pt::UpscalerKind::Fsr4, pt::UpscalerKind::Dlss, pt::UpscalerKind::Xess,
+        for (const pt::UpscalerKind kind : {pt::UpscalerKind::Fsr1, pt::UpscalerKind::Fsr, pt::UpscalerKind::Fsr4, pt::UpscalerKind::Dlss, pt::UpscalerKind::Xess,
                                             pt::UpscalerKind::MetalFx}) {
             std::string reason;
             const bool available = app_.scene.UpscalerAvailable(kind, reason);

@@ -2,6 +2,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <cstdlib>
+
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 
@@ -11,6 +13,12 @@
 namespace pt {
 
 std::filesystem::path ExecutableDir() {
+#ifdef __ANDROID__
+    /* No executable folder on Android: the launcher (android/) unpacks the game's runtime files (shaders, fonts, extras.pak)
+       into the app's external files folder and names it in PT_ANDROID_ROOT; data/ (settings, saves, pt.log) and game/ (the
+       three archives) live there too, where the launcher can share the log */
+    if (const char* root = std::getenv("PT_ANDROID_ROOT"); root && *root) return std::filesystem::path(reinterpret_cast<const char8_t*>(root));
+#endif
     const char* base = SDL_GetBasePath();
     return base ? std::filesystem::path(reinterpret_cast<const char8_t*>(base)) : std::filesystem::current_path();
 }

@@ -1,0 +1,144 @@
+# The Android build (docs/android.md): Mesa's Turnip Vulkan driver for Adreno GPUs, built from Mesa's newest stable release
+# (cached per release), then the arm64 APK with the port's native game, the launcher and the staged runtime files. A push to
+# the android branch publishes the APK as the pre-release "android-latest", the link to install from on the phone.
+name: Android
+
+on:
+  push:
+    branches: [android]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  turnip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      mesa: ${{ steps.mesa.outputs.tag }}
+    steps:
+      - name: Newest Mesa release
+        id: mesa
+        run: |
+          tag=$(git ls-remote --tags --refs https://gitlab.freedesktop.org/mesa/mesa.git 'mesa-*' | sed 's#.*refs/tags/##' \
+            | grep -E '^mesa-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          test -n "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Mesa $tag"
+
+      - name: Cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: turnip
+          key: turnip-${{ steps.mesa.outputs.tag }}-android33-v1
+
+      - name: Build Turnip
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bison flex patchelf glslang-tools ninja-build
+          pip install --user meson mako pyyaml packaging
+          git clone --depth 1 --branch "${{ steps.mesa.outputs.tag }}" https://gitlab.freedesktop.org/mesa/mesa.git mesa
+          ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          cat > android-aarch64 <<EOF
+          [binaries]
+          ar = '$ndk/llvm-ar'
+          c = ['$ndk/aarch64-linux-android33-clang']
+          cpp = ['$ndk/aarch64-linux-android33-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+          c_ld = 'lld'
+          cpp_ld = 'lld'
+          strip = '$ndk/llvm-strip'
+          pkg-config = ['env', 'PKG_CONFIG_LIBDIR=/nonexistent', '/usr/bin/pkg-config']
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv8'
+          endian = 'little'
+          EOF
+          cd mesa
+          meson setup build --cross-file ../android-aarch64 -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=33 \
+            -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true \
+            -Degl=disabled
+          ninja -C build src/freedreno/vulkan/libvulkan_freedreno.so
+          mkdir -p ../turnip
+          cp build/src/freedreno/vulkan/libvulkan_freedreno.so ../turnip/vulkan.ad07XX.so
+          patchelf --set-soname vulkan.adreno.so ../turnip/vulkan.ad07XX.so
+          cp docs/license.rst ../turnip/Mesa-license.rst
+          echo "${{ steps.mesa.outputs.tag }}" > ../turnip/version.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: turnip
+          path: turnip
+
+  apk:
+    needs: turnip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: turnip
+          path: turnip
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q glslc ninja-build
+          pip install --user cmake==3.31.6
+          cmake_root=$(python3 -c "import cmake, os; print(os.path.join(os.path.dirname(cmake.__file__), 'data'))")
+          "$cmake_root/bin/cmake" --version
+          echo "cmake.dir=$cmake_root" > android/local.properties
+          echo "sdk.dir=$ANDROID_SDK_ROOT" >> android/local.properties
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --install "ndk;28.2.13676358" "platforms;android-35" "build-tools;35.0.0" > /dev/null
+          git clone --depth 1 https://github.com/bylaws/libadrenotools "$RUNNER_TEMP/adrenotools"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+
+      - name: Build
+        env:
+          PT_TURNIP_SO: ${{ github.workspace }}/turnip/vulkan.ad07XX.so
+          PT_EXTRA_LICENSES: Mesa-Turnip-MIT.txt=${{ github.workspace }}/turnip/Mesa-license.rst;libadrenotools-BSD-2.txt=${{ runner.temp }}/adrenotools/LICENSE
+        run: |
+          cd android
+          gradle --no-daemon assembleRelease
+          ls -la app/build/outputs/apk/release
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/PT-Port-Android.apk"
+          unzip -l "$RUNNER_TEMP/PT-Port-Android.apk" | grep -E "lib/arm64-v8a|assets/turnip|shaders/fsr1" || true
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: PT-Port-Android
+          path: ${{ runner.temp }}/PT-Port-Android.apk
+
+      # the unstripped libmain.so, to turn the library+offset frames of a crash in pt.log into source lines
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-symbols
+          path: android/app/build/intermediates/merged_native_libs/release/**/libmain.so
+          if-no-files-found: warn
+
+      - name: Publish
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete android-latest --yes --cleanup-tag || true
+          gh release create android-latest "$RUNNER_TEMP/PT-Port-Android.apk" --prerelease --target "$GITHUB_SHA" \
+            --title "P.T. Port for Android (build ${{ github.run_number }})" \
+            --notes "Build ${{ github.run_number }} from $(git rev-parse --short HEAD), Turnip from Mesa ${{ needs.turnip.outputs.mesa }}. Install the APK on the phone, open it, import your fake PKG, then Play. See docs/android.md."

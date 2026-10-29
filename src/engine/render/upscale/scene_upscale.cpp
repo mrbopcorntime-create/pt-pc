@@ -241,7 +241,18 @@ bool SceneRenderer::CreateUpscalePipelines() {
     nr_decode.colors = {kHdrTargetFormat};
     up_nr_decode_ = gpu_->CreateGraphicsPipeline(nr_decode);
 
-    if (!up_motion_ || !up_object_motion_ || !up_reactive_ || !up_resolve_ || !up_demod_ || !up_fg_lens_ || !up_nr_encode_ || !up_nr_decode_) {
+    gpu::GraphicsPipelineDesc fsr1_easu;
+    fsr1_easu.layout = layout_;
+    fsr1_easu.fragment = "fsr1_easu.frag";
+    fsr1_easu.colors = {kUpscaleColorFormat};
+    up_fsr1_easu_ = gpu_->CreateGraphicsPipeline(fsr1_easu);
+
+    gpu::GraphicsPipelineDesc fsr1_resolve = resolve;
+    fsr1_resolve.fragment = "fsr1_resolve.frag";
+    up_fsr1_resolve_ = gpu_->CreateGraphicsPipeline(fsr1_resolve);
+
+    if (!up_motion_ || !up_object_motion_ || !up_reactive_ || !up_resolve_ || !up_demod_ || !up_fg_lens_ || !up_nr_encode_ || !up_nr_decode_ ||
+        !up_fsr1_easu_ || !up_fsr1_resolve_) {
         LogError("scene renderer: upscale pipeline creation failed");
         return false;
     }
@@ -249,8 +260,8 @@ bool SceneRenderer::CreateUpscalePipelines() {
 }
 
 void SceneRenderer::DestroyUpscalePipelines() {
-    gpu::PipelineHandle* all[] = {&up_motion_, &up_object_motion_, &up_reactive_,  &up_resolve_,
-                                  &up_demod_,  &up_fg_lens_,        &up_nr_encode_, &up_nr_decode_};
+    gpu::PipelineHandle* all[] = {&up_motion_, &up_object_motion_, &up_reactive_,  &up_resolve_,    &up_demod_,
+                                  &up_fg_lens_, &up_nr_encode_,     &up_nr_decode_, &up_fsr1_easu_, &up_fsr1_resolve_};
     for (gpu::PipelineHandle* p : all) {
         if (*p) {
             gpu_->DestroyPipeline(*p);
@@ -453,8 +464,9 @@ bool SceneRenderer::SetupUpscaler(gpu::Extent2D output) {
         }
         up_.created = false;
         up_.ray_reconstruction = false;
-        up_.backend = kind == UpscalerKind::Spatial ? nullptr : UpscaleHost::Get().Backend(kind);
-        if (kind != UpscalerKind::Spatial) {
+        const bool shader_only = kind == UpscalerKind::Spatial || kind == UpscalerKind::Fsr1;
+        up_.backend = shader_only ? nullptr : UpscaleHost::Get().Backend(kind);
+        if (!shader_only) {
             if (!up_.backend) {
                 up_.failed_key = failed_key;
                 up_.failed_at = std::chrono::steady_clock::now();
@@ -506,11 +518,16 @@ bool SceneRenderer::SetupUpscaler(gpu::Extent2D output) {
     up_.phase_count = std::max(1, JitterPhaseCount(render.width, output.width));
     up_.jitter_pixels = JitterOffset(up_.jitter_index, up_.phase_count);
     up_.jitter_index = (up_.jitter_index + 1) % up_.phase_count;
-    if (up_.warp_test) {
+    /* FSR 1 is spatial: no jitter, no history; textures keep the detail of the output resolution through the mip bias AMD
+       recommends for it */
+    up_.fsr1 = kind == UpscalerKind::Fsr1;
+    if (up_.warp_test || up_.fsr1) {
         up_.jitter_pixels = glm::vec2(0.0f);
     }
     up_.jitter_ndc = 2.0f * up_.jitter_pixels / glm::vec2(static_cast<float>(render.width), static_cast<float>(render.height));
-    up_.mip_bias = up_.backend ? up_.backend->MipBias(static_cast<float>(render.width) / static_cast<float>(output.width)) : 0.0f;
+    up_.mip_bias = up_.backend ? up_.backend->MipBias(static_cast<float>(render.width) / static_cast<float>(output.width))
+                   : up_.fsr1  ? std::log2(static_cast<float>(render.width) / static_cast<float>(output.width))
+                               : 0.0f;
     if (const char* bias = std::getenv("PT_UPSCALE_MIP_BIAS")) {
         up_.mip_bias = static_cast<float>(std::atof(bias));
     }
@@ -1029,7 +1046,12 @@ void SceneRenderer::RecordUpscaleResolve(gpu::CommandList& cmd, bool upscaled) {
                         1.0f / static_cast<float>(output_extent_.width), 1.0f / static_cast<float>(output_extent_.height));
     push.f1 = glm::vec4(static_cast<float>(extent_.width), static_cast<float>(extent_.height), upscaled && handy_demod_ ? 1.0f : 0.0f,
                         rt_reflections_ && renderer_->OutputMode() != RendererOutputMode::Sdr ? 1.0f : 0.0f);
-    Fullscreen(cmd, up_resolve_, push);
+    if (up_.fsr1 && upscaled) {
+        /* the sharpness setting (0 to 1) as RCAS stops: 1 is the strongest (0 stops), 0 turns RCAS off */
+        const float sharpness = std::clamp(upscale.sharpness, 0.0f, 1.0f);
+        push.f2 = glm::vec4(2.0f * (1.0f - sharpness), sharpness > 0.0f ? 1.0f : 0.0f, 0.0f, 0.0f);
+    }
+    Fullscreen(cmd, up_.fsr1 && upscaled ? up_fsr1_resolve_ : up_resolve_, push);
     cmd.EndPass();
     cmd.UseTargets({{&post_hdr_, gpu::Layout::ShaderReadOnly},
                      {&post_depth_, gpu::Layout::ShaderReadOnly},
@@ -1049,6 +1071,23 @@ void SceneRenderer::RecordUpscaleResolve(gpu::CommandList& cmd, bool upscaled) {
 }
 
 void SceneRenderer::RecordUpscale(gpu::CommandList& cmd, float dt) {
+    if (up_.fsr1) {
+        /* AMD FSR 1 EASU: the lit scene at the render size into the output-sized upscaled_ (shaders/fsr1_easu.frag); no inputs
+           pass, so the four upscale timestamps measure EASU and RCAS together */
+        FrameSlot& slot = slots_[renderer_->FrameIndex()];
+        for (uint32_t q = 0; q < 3; ++q) cmd.WriteTimestamp(slot.upscale_queries, q);
+        cmd.UseTargets({{&hdr_, gpu::Layout::ShaderReadOnly}, {&upscaled_, gpu::Layout::ColorAttachment}});
+        cmd.BeginPass(output_extent_, {{&upscaled_, false, {}}});
+        gpu::PassPush push;
+        push.f0 = glm::vec4(static_cast<float>(extent_.width), static_cast<float>(extent_.height), static_cast<float>(output_extent_.width),
+                            static_cast<float>(output_extent_.height));
+        Fullscreen(cmd, up_fsr1_easu_, push);
+        cmd.EndPass();
+        cmd.BeginLabel("upscale resolve");
+        RecordUpscaleResolve(cmd, true);
+        cmd.EndLabel();
+        return;
+    }
     RecordUpscalePrepare(dt);
     const bool upscaled = RecordUpscaleDispatch();
     cmd.BeginLabel("upscale resolve");

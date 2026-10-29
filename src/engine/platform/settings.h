@@ -50,6 +50,23 @@ struct AppSettings {
         float controller_speaker_volume = 0.5f;
         std::string output_device;
     } audio;
+#ifdef __ANDROID__
+    /* Android (docs/android.md): no PC update or Discord app to talk to; no speech model, so the stand-in for the word is on
+       (J on a keyboard, both sticks clicked on a controller); AMD FSR 1 renders at 1/1.7 per axis and sharpens */
+    struct Network {
+        bool check_updates = false;
+        bool discord_presence = false;
+    } network;
+    struct Voice {
+        std::string device;
+        std::string key = "J";
+    } voice;
+    struct Upscaling {
+        std::string upscaler = "fsr1";
+        std::string quality = "balanced";
+        float scale = 0.667f;
+        float sharpness = 0.3f;
+#else
     struct Network {
         bool check_updates = true;
         bool discord_presence = true;
@@ -63,6 +80,7 @@ struct AppSettings {
         std::string quality = "quality";
         float scale = 0.667f;
         float sharpness = 0.0f;
+#endif
         std::string dlss_model = "auto";
         std::string frame_generation = "off";
         int dlssg_multiplier = 2;

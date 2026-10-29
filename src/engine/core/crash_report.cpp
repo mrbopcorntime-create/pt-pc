@@ -16,6 +16,12 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <dbghelp.h>
+#elif defined(__ANDROID__)
+/* backtrace() is in Android's libc from API 33 only; the unwinder and dladdr work on every version */
+#include <dlfcn.h>
+#include <signal.h>
+#include <unistd.h>
+#include <unwind.h>
 #else
 #include <execinfo.h>
 #include <signal.h>
@@ -122,11 +128,37 @@ void OnFatalSignal(int sig, siginfo_t* info, void*) {
                        : sig == SIGABRT ? "SIGABRT (abort)" : "signal";
     if (g_dumping.fetch_add(1) == 0) {
         LogError("crash: {} ({}) at address {}", name, sig, info ? info->si_addr : nullptr);
+#ifdef __ANDROID__
+        /* each frame as library+offset (symbolize with the build's unstripped libmain.so) and the nearest exported name */
+        struct Frames {
+            void* pc[64];
+            int count = 0;
+        } frames;
+        _Unwind_Backtrace(
+            [](_Unwind_Context* context, void* arg) -> _Unwind_Reason_Code {
+                auto* f = static_cast<Frames*>(arg);
+                if (f->count >= 64) return _URC_END_OF_STACK;
+                if (const uintptr_t pc = _Unwind_GetIP(context)) f->pc[f->count++] = reinterpret_cast<void*>(pc);
+                return _URC_NO_REASON;
+            },
+            &frames);
+        for (int i = 0; i < frames.count; ++i) {
+            Dl_info dl{};
+            if (dladdr(frames.pc[i], &dl) && dl.dli_fname) {
+                const char* base = std::strrchr(dl.dli_fname, '/');
+                LogError("crash: #{} {}+{:#x} {}", i, base ? base + 1 : dl.dli_fname,
+                         reinterpret_cast<uintptr_t>(frames.pc[i]) - reinterpret_cast<uintptr_t>(dl.dli_fbase), dl.dli_sname ? dl.dli_sname : "");
+            } else {
+                LogError("crash: #{} {}", i, frames.pc[i]);
+            }
+        }
+#else
         void* frames[64];
         const int count = backtrace(frames, 64);
         if (char** lines = backtrace_symbols(frames, count)) {
             for (int i = 0; i < count; ++i) LogError("crash: #{} {}", i, lines[i]);
         }
+#endif
         LogExit(128 + sig, "crash");
     }
     raise(sig);

@@ -409,7 +409,7 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
         LogInfo("dominant light: view space ({:.4f} {:.4f} {:.4f} {:.4f})", dominant_light.x, dominant_light.y, dominant_light.z, dominant_light.w);
     }
     static const bool fixed_dither = std::getenv("PT_UPSCALE_FIXED_DITHER") != nullptr;
-    if ((up_.enabled || date_active_) && !fixed_dither) {
+    if (((up_.enabled && !up_.fsr1) || date_active_) && !fixed_dither) {
         static constexpr glm::vec2 kTaps[4] = {{1.0f, 1.0f}, {-1.0f, -1.0f}, {1.0f, -1.0f}, {-1.0f, 1.0f}};
         frame_->views[main_view_.index].temporal =
             glm::vec4(static_cast<float>((frame_counter_ * 39u) & 63u), kTaps[frame_counter_ & 3u], 1.0f);
@@ -549,7 +549,7 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
     mirror_stale_ = mirror_stale_cache_[mirror_cache_index_];
     mirror_active_ = false;
     mirror_stale_active_ = false;
-    mirror_temporal_enabled_ = up_.enabled && !std::getenv("PT_MIRROR_TEMPORAL_OFF");
+    mirror_temporal_enabled_ = up_.enabled && !up_.fsr1 && !std::getenv("PT_MIRROR_TEMPORAL_OFF");
     mirrors_.clear();
     static const bool trace_active = std::getenv("PT_MIRROR_TRACE") != nullptr;
     if (trace_active) {
@@ -2261,7 +2261,7 @@ void SceneRenderer::RecordReflectMapMarch(gpu::CommandList& cmd, const ViewSetup
     push.f2 = glm::vec4(1.0f / static_cast<float>(refmap_.Extent().width), 1.0f / static_cast<float>(refmap_.Extent().height), 0.0f, 0.0f);
     static const bool march_fixed = std::getenv("PT_REFLECT_MARCH_FIXED") != nullptr;
     static const bool temporal_off_march = std::getenv("PT_REFLECT_TEMPORAL_OFF") != nullptr;
-    if (up_.enabled && !temporal_off_march && !march_fixed && reflect_layer_.Valid() && reflect_temporal_pipeline_ && reflect_layer_pipeline_) {
+    if (up_.enabled && !up_.fsr1 && !temporal_off_march && !march_fixed && reflect_layer_.Valid() && reflect_temporal_pipeline_ && reflect_layer_pipeline_) {
         push.f2.z = 1.0f;
         push.f2.w = static_cast<float>(frame_counter_ % 64u);
     }
@@ -2335,7 +2335,7 @@ void SceneRenderer::RecordReflections(gpu::CommandList& cmd, const ViewSetup& vi
     push.f1 = glm::vec4(1.0f, 1.0f, screen.reflect_scale, screen.reflect_bias);
     push.f2 = glm::vec4(horizontal, screen.reflect_edge ? 1.0f : 0.0f);
     static const bool temporal_off = std::getenv("PT_REFLECT_TEMPORAL_OFF") != nullptr;
-    if (up_.enabled && !temporal_off && reflect_layer_.Valid() && reflect_temporal_pipeline_ &&
+    if (up_.enabled && !up_.fsr1 && !temporal_off && reflect_layer_.Valid() && reflect_temporal_pipeline_ &&
         (rt_reflections_ ? reflect_layer_rt_ : reflect_layer_pipeline_)) {
         RecordReflectionTemporal(cmd, view, push);
         return;
@@ -2581,7 +2581,7 @@ void SceneRenderer::RecordView(gpu::CommandList& cmd, const ViewSetup& view, Ren
         Stamp(cmd, 7);
     }
     cmd.BeginPass(ViewArea(view), {{&output, false, {}}}, &depth_, true, false);
-    if (main_view && up_.enabled) {
+    if (main_view && up_.enabled && !up_.fsr1) {
         RecordOpaqueSnapshot(cmd, output);
     }
     SceneVfxContext liquid_context;
@@ -2968,7 +2968,7 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
     RecordReflectionSample(cmd, *lighting_);
     BindSets(cmd, gpu::BindPoint::Graphics);
     if (debug_view == DebugView::Lit || debug_view == DebugView::Ambient) {
-        if (up_.enabled) {
+        if (up_.enabled && !up_.fsr1) {
             cmd.BeginLabel("upscale inputs");
             RecordUpscaleInputs(cmd, main_view_);
             cmd.EndLabel();

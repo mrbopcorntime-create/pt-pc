@@ -22,7 +22,8 @@ class Device;
 
 class FrameGeneration;
 
-enum class UpscalerKind : int { Off = 0, Fsr = 1, Dlss = 2, Xess = 3, Spatial = 4, Fsr4 = 5, MetalFx = 6, Count = 7 };
+/* Fsr1: AMD FSR 1, spatial (EASU + RCAS shaders in the renderer, no SDK), the upscaler for phones (docs/android.md) */
+enum class UpscalerKind : int { Off = 0, Fsr = 1, Dlss = 2, Xess = 3, Spatial = 4, Fsr4 = 5, MetalFx = 6, Fsr1 = 7, Count = 8 };
 enum class DlssModel : int { Auto = 0, K = 1, L = 2, M = 3, Count = 4 };
 enum class FrameGenKind : int { Off = 0, Fsr = 1, Dlss = 2, Metalfx = 3, Xess = 4, Count = 5 };
 enum class UpscaleQuality : int { NativeAA = 0, Quality = 1, Balanced = 2, Performance = 3, UltraPerformance = 4, Custom = 5, Count = 6 };

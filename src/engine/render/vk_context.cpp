@@ -35,6 +35,9 @@
 #include "engine/render/vk_address_log.h"
 #include "engine/render/vk_layers.h"
 #include "engine/render/upscale/streamline.h"
+#ifdef __ANDROID__
+#include "engine/render/android_vulkan.h"
+#endif
 
 namespace pt {
 extern bool g_checkpoints;
@@ -178,6 +181,10 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
         if (loader) LogInfo("vulkan: {}", VulkanLibraryPath());
     }
 #endif
+#ifdef __ANDROID__
+    /* Turnip through adrenotools on Adreno GPUs, else the system driver (android_vulkan.h) */
+    if (!loader) loader = android::LoadVulkan();
+#endif
     const std::vector<ImplicitLayer> implicit_layers = PrepareImplicitLayers();
     if (loader) {
         /* With Streamline loaded, instance, device and swapchain must come from its proxies, so volk takes the interposer's loader instead of vulkan-1.dll. */
@@ -310,6 +317,11 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
             }
         }
 #endif
+#ifdef __ANDROID__
+        /* SDL's surface would come from the system libvulkan.so SDL loaded, not from the driver volk uses */
+        if (!created && !android::CreateSurface(instance, window, surface)) return false;
+        created = true;
+#endif
         if (!created && !SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface)) {
             LogError("SDL_Vulkan_CreateSurface: {}", SDL_GetError());
             return false;
@@ -383,7 +395,13 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     }
 #endif
 
-#ifdef __APPLE__
+    bool bc_feature = true;
+#ifdef __ANDROID__
+    /* Qualcomm's driver lacks BC textures; Turnip has them, and adrenotools can patch some Qualcomm drivers (android_vulkan.h) */
+    const bool bc_usable = android::PrepareBcTextures(instance, physical, bc_feature);
+    LogInfo("vulkan: driver {}, BC textures {}", android::DriverName(), bc_usable ? (bc_feature ? "supported" : "enabled by patch") : "unavailable");
+#endif
+#if defined(__APPLE__) || defined(__ANDROID__)
     {
         /* MoltenVK on an older GPU (an Intel Mac's) can lack what the renderer needs, above all the bindless image array (Metal
            argument buffers tier 2): say which feature, not just that the device could not be created (docs/macos.md) */
@@ -405,7 +423,11 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
             {"descriptorBindingUpdateUnusedWhilePending", have12.descriptorBindingUpdateUnusedWhilePending},
             {"descriptorBindingStorageBufferUpdateAfterBind", have12.descriptorBindingStorageBufferUpdateAfterBind},
             {"scalarBlockLayout", have12.scalarBlockLayout}, {"samplerAnisotropy", have2.features.samplerAnisotropy},
+#ifdef __ANDROID__
+            {"textureCompressionBC", bc_usable ? VK_TRUE : VK_FALSE}, {"fillModeNonSolid", have2.features.fillModeNonSolid},
+#else
             {"textureCompressionBC", have2.features.textureCompressionBC}, {"fillModeNonSolid", have2.features.fillModeNonSolid},
+#endif
             {"shaderInt16", have2.features.shaderInt16}, {"shaderClipDistance", have2.features.shaderClipDistance},
         };
         bool complete = true;
@@ -437,7 +459,7 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     features.pNext = &features12;
     features.features.samplerAnisotropy = VK_TRUE;
-    features.features.textureCompressionBC = VK_TRUE;
+    features.features.textureCompressionBC = bc_feature ? VK_TRUE : VK_FALSE;
     features.features.fillModeNonSolid = VK_TRUE;
     features.features.shaderInt16 = VK_TRUE;
     features.features.shaderClipDistance = VK_TRUE;
@@ -829,6 +851,34 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
     if (extent.width == 0 || extent.height == 0) {
         return false;
     }
+#ifdef __ANDROID__
+    /* A landscape game on a portrait-native phone: Android reports the extent in the panel's native orientation with a 90 or
+       270 degree current transform. The game does not pre-rotate its frames, so the swapchain is made in the window's
+       orientation with the identity transform and the compositor rotates it. The compositor also scales the buffer to the
+       window, so the game renders at most PT_ANDROID_MAX_HEIGHT lines (the launcher's Resolution setting, 1080 by default)
+       instead of the panel's 1440 or more. */
+    VkSurfaceTransformFlagBitsKHR android_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    if (caps.currentTransform & (VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR | VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR)) {
+        std::swap(extent.width, extent.height);
+    }
+    if (!(caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)) {
+        android_transform = caps.currentTransform;
+        extent = caps.currentExtent;
+    } else {
+        uint32_t max_height = 1080;
+        if (const char* env = std::getenv("PT_ANDROID_MAX_HEIGHT"); env && std::atoi(env) >= 360) max_height = static_cast<uint32_t>(std::atoi(env));
+        const uint32_t short_side = std::min(extent.width, extent.height);
+        if (short_side > max_height) {
+            const double scale = static_cast<double>(max_height) / static_cast<double>(short_side);
+            extent.width = std::max<uint32_t>(1, static_cast<uint32_t>(extent.width * scale + 0.5) & ~1u);
+            extent.height = std::max<uint32_t>(1, static_cast<uint32_t>(extent.height * scale + 0.5) & ~1u);
+        }
+        extent.width = std::clamp(extent.width, caps.minImageExtent.width, std::max(caps.minImageExtent.width, caps.maxImageExtent.width));
+        extent.height = std::clamp(extent.height, caps.minImageExtent.height, std::max(caps.minImageExtent.height, caps.maxImageExtent.height));
+    }
+    LogInfo("vulkan: Android swapchain {}x{} (surface {}x{}, transform {:#x})", extent.width, extent.height, caps.currentExtent.width,
+            caps.currentExtent.height, static_cast<unsigned>(caps.currentTransform));
+#endif
     uint32_t image_count = caps.minImageCount + 1;
     if (caps.maxImageCount > 0) {
         image_count = std::min(image_count, caps.maxImageCount);
@@ -843,8 +893,15 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
     info.imageArrayLayers = 1;
     info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+#ifdef __ANDROID__
+    info.preTransform = android_transform;
+#else
     info.preTransform = caps.currentTransform;
+#endif
     info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+#ifdef __ANDROID__
+    if (!(caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)) info.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+#endif
     info.presentMode = present_mode;
     info.clipped = VK_TRUE;
     info.oldSwapchain = swapchain.handle;

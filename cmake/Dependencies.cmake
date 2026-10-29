@@ -2,11 +2,28 @@ include(FetchContent)
 cmake_policy(SET CMP0169 OLD)
 set(FETCHCONTENT_QUIET ON)
 
-find_package(Vulkan REQUIRED COMPONENTS glslc)
+if(ANDROID)
+  # The NDK's Vulkan headers lag behind what the renderer uses; take the Khronos headers instead (the loader is
+  # libvulkan.so on the device, loaded at run time by volk or adrenotools). glslc runs on the build host.
+  FetchContent_Declare(vulkan_headers GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git GIT_TAG v1.4.321 GIT_SHALLOW TRUE)
+  FetchContent_Populate(vulkan_headers)
+  add_library(pt_vulkan_headers INTERFACE)
+  target_include_directories(pt_vulkan_headers INTERFACE ${vulkan_headers_SOURCE_DIR}/include)
+  add_library(Vulkan::Headers ALIAS pt_vulkan_headers)
+  find_program(Vulkan_GLSLC_EXECUTABLE glslc REQUIRED NO_CMAKE_FIND_ROOT_PATH)
+else()
+  find_package(Vulkan REQUIRED COMPONENTS glslc)
+endif()
 find_package(Threads REQUIRED)
 
-set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-set(SDL_STATIC ON CACHE BOOL "" FORCE)
+if(ANDROID)
+  # SDL's Java activity loads libSDL3.so before libmain.so (android/app/.../PtActivity.java)
+  set(SDL_SHARED ON CACHE BOOL "" FORCE)
+  set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+else()
+  set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+  set(SDL_STATIC ON CACHE BOOL "" FORCE)
+endif()
 set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(sdl3 GIT_REPOSITORY https://github.com/libsdl-org/SDL.git GIT_TAG release-3.4.16 GIT_SHALLOW TRUE)
@@ -27,6 +44,10 @@ FetchContent_Declare(lua51 URL https://www.lua.org/ftp/lua-5.1.5.tar.gz
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(sdl3 zlib)
+if(ANDROID)
+  # the rest of the build links SDL3::SDL3-static; on Android that is the shared library
+  add_library(SDL3::SDL3-static ALIAS SDL3-shared)
+endif()
 
 # The DS4's Bluetooth speaker consumes SBC frames, not its USB headset PCM endpoint.
 FetchContent_Declare(google_sbc URL https://github.com/google/libsbc/archive/6e505650145c9973d08a0bdd5e5f5e1914305e40.tar.gz
@@ -53,6 +74,16 @@ FetchContent_Declare(whisper URL https://github.com/ggml-org/whisper.cpp/archive
   URL_HASH SHA256=57e280cee375ab02425b806ad5146b99f6eb9357e3c2b31357c8a6af2e2e44ae)
 FetchContent_Populate(whisper)
 set(PT_VOICE_DIR ${CMAKE_BINARY_DIR}/voice)
+# The voice recognizer loads whisper.cpp at run time and works without it (the [voice] key or pad button stands in);
+# Android leaves it out: no ggml CPU variants for its ARM targets here, and the speech models are large for a phone
+if(ANDROID)
+  set(PT_VOICE_DEFAULT OFF)
+else()
+  set(PT_VOICE_DEFAULT ON)
+endif()
+option(PT_VOICE "Build whisper.cpp and fetch the speech models for the voice part" ${PT_VOICE_DEFAULT})
+add_custom_target(pt_voice_runtime)
+if(PT_VOICE)
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
 set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
@@ -71,7 +102,6 @@ set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 set(BUILD_SHARED_LIBS ON)
 add_subdirectory(${whisper_SOURCE_DIR} ${whisper_BINARY_DIR} EXCLUDE_FROM_ALL)
 unset(BUILD_SHARED_LIBS)
-add_custom_target(pt_voice_runtime)
 add_dependencies(pt_voice_runtime whisper)
 # whisper.cpp names its own output folder (bin); the DLLs go to voice/ next to the models
 foreach(lib whisper ggml ggml-base)
@@ -128,8 +158,10 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND MSVC)
     endif()
   endforeach()
 endif()
+endif()
 set(PT_WHISPER_INCLUDE_DIRS ${whisper_SOURCE_DIR}/include ${whisper_SOURCE_DIR}/ggml/include)
 
+if(PT_VOICE)
 # The models next to pt.exe in voice/: Whisper base.en (OpenAI, MIT) quantized to q5_1 by the whisper.cpp project, the
 # larger small.en q5_1 as the second opinion for short utterances the first model did not take for the word, and the
 # Silero VAD v6.2.0 (MIT) in ggml form; the notices go with them
@@ -161,6 +193,7 @@ file(COPY ${CMAKE_SOURCE_DIR}/third_party/voice_notices/ DESTINATION ${PT_VOICE_
 foreach(stale cmudict-en-us.dict en-us vosk)
   file(REMOVE_RECURSE ${PT_VOICE_DIR}/${stale})
 endforeach()
+endif()
 FetchContent_Populate(volk)
 FetchContent_Populate(vma)
 FetchContent_Populate(glm)
@@ -202,6 +235,9 @@ target_compile_definitions(pt_thirdparty PUBLIC VK_NO_PROTOTYPES IMGUI_IMPL_VULK
 target_compile_definitions(pt_thirdparty PRIVATE ZSTD_DISABLE_ASM)
 if(WIN32)
   target_compile_definitions(pt_thirdparty PUBLIC VK_USE_PLATFORM_WIN32_KHR)
+elseif(ANDROID)
+  # vkCreateAndroidSurfaceKHR (src/engine/render/vk_context.cpp): the surface is made through the driver adrenotools loaded
+  target_compile_definitions(pt_thirdparty PUBLIC VK_USE_PLATFORM_ANDROID_KHR)
 elseif(APPLE)
   # VkPhysicalDevicePortabilitySubsetFeaturesKHR (MoltenVK, src/engine/render/vk_context.cpp) is in the headers' beta part
   target_compile_definitions(pt_thirdparty PUBLIC VK_ENABLE_BETA_EXTENSIONS)

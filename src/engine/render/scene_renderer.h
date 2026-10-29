@@ -589,6 +589,8 @@ private:
     gpu::PipelineHandle up_object_motion_;
     gpu::PipelineHandle up_reactive_;
     gpu::PipelineHandle up_resolve_;
+    gpu::PipelineHandle up_fsr1_easu_;
+    gpu::PipelineHandle up_fsr1_resolve_;
     gpu::PipelineHandle up_demod_;
     gpu::PipelineHandle up_fg_lens_;
     gpu::PipelineHandle up_nr_encode_;
@@ -823,6 +825,8 @@ private:
         glm::vec2 jitter_ndc{0.0f};
         float mip_bias = 0.0f;
         bool warp_test = false;
+        /* AMD FSR 1 (spatial): no jitter, no temporal inputs, the dither patterns stay fixed */
+        bool fsr1 = false;
         bool warp_history = false;
         std::string failed_key;
         std::chrono::steady_clock::time_point failed_at{};
