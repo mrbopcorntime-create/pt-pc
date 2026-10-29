@@ -10,7 +10,7 @@ work="${RUNNER_TEMP:-/tmp}/turnip-build"
 rm -rf "$work"
 mkdir -p "$work" "$out"
 cd "$work"
-git clone --depth 1 --branch "$tag" https://gitlab.freedesktop.org/mesa/mesa.git mesa
+git -c advice.detachedHead=false clone -q --depth 1 --branch "$tag" https://gitlab.freedesktop.org/mesa/mesa.git mesa
 ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
 cat > android-aarch64 <<CROSS
 [binaries]

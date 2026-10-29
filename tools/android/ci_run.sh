@@ -9,7 +9,7 @@ set -o pipefail
 "$@" 2>&1 | tee "$log"
 status=$?
 if [ "$status" -ne 0 ]; then
-  tail -n 80 "$log" | cut -c1-300 | sed -e 's/%/%25/g' | awk 'BEGIN { ORS = "%0A" } { print }' > "$log.tail"
+  tr "\r" "\n" < "$log" | grep -v "^Updating files\|^Receiving objects\|^Resolving deltas" | tail -n 80 | cut -c1-300 | sed -e 's/%/%25/g' | awk 'BEGIN { ORS = "%0A" } { print }' > "$log.tail"
   echo "::error title=${title} failed (exit ${status})::$(cat "$log.tail")"
 fi
 exit "$status"
